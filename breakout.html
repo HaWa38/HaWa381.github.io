@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>打磚塊：左鍵啟動與音效修正版</title>
+    <style>
+        body {
+            margin: 0; padding: 0;
+            background-color: #2c3e50;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            height: 100vh;
+            font-family: 'Segoe UI', Tahoma, sans-serif;
+            color: white;
+            overflow: hidden;
+        }
+        h1 { margin: 0 0 10px 0; font-size: 24px; text-shadow: 2px 2px 4px rgba(0,0,0,0.5); }
+        canvas {
+            background-color: #ecf0f1;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            border-radius: 8px;
+            display: block;
+            cursor: none; /* 隱藏游標 */
+        }
+        .ui-container { margin-top: 15px; text-align: center; }
+        .highlight { color: #f1c40f; font-weight: bold; }
+        .hint { color: #2ecc71; font-weight: bold; animation: blink 1.5s infinite; }
+        @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+    <h1>🧱  經典打磚塊 - <span id="levelDisplay" class="highlight">Level 1</span></h1>
+    <canvas id="gameCanvas" width="600" height="400"></canvas>
+    
+    <div class="ui-container">
+        <p id="gameStatus" class="hint">按滑鼠左鍵以發射球</p>
+        <p style="font-size: 14px; color: #bdc3c7;">
+            操作：滑鼠左右移動 | 生命: <span id="livesText" style="color:#e74c3c">5</span> | 
+            <span id="rowInfo">層數: 1 層</span>
+        </p>
+    </div>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        // --- 音效系統 (Web Audio API) ---
+        let audioCtx = null;
+
+        function playSound(freq, type, duration, vol) {
+            // 確保 AudioContext 已啟動
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+            gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + duration);
+        }
+
+        // 遊戲變數
+        let level = 1;
+        let score = 0;
+        let lives = 5;
+        let baseSpeed = 4;
+        let speedIncrement = 0.5;
+        let isBallLaunched = false; // 球是否已射出
+
+        let ballRadius = 8;
+        let x, y, dx, dy;
+
+        const paddleHeight = 12;
+        const paddleWidth = 90;
+        let paddleX = (canvas.width - paddleWidth) / 2;
+
+        const brickColumnCount = 7;
+        const brickWidth = 70;
+        const brickHeight = 20;
+        const brickPadding = 10;
+        const brickOffsetTop = 45;
+        const brickOffsetLeft = 25;
+        let bricks = [];
+        let bricksRemaining = 0;
+
+        function initBricks() {
+            bricks = [];
+            let currentRows = Math.min(level, 7);
+            bricksRemaining = currentRows * brickColumnCount;
+            document.getElementById("rowInfo").innerText = `層數: ${currentRows} 層`;
+
+            for (let c = 0; c < brickColumnCount; c++) {
+                bricks[c] = [];
+                for (let r = 0; r < currentRows; r++) {
+                    bricks[c][r] = { x: 0, y: 0, status: 1 };
+                }
+            }
+        }
+
+        function resetBallPosition() {
+            isBallLaunched = false;
+            // 球固定在擋板上方
+            x = paddleX + paddleWidth / 2;
+            y = canvas.height - paddleHeight - ballRadius - 2;
+            let currentSpeed = baseSpeed + (level - 1) * speedIncrement;
+            dx = currentSpeed;
+            dy = -currentSpeed;
+            document.getElementById("gameStatus").style.display = "block";
+        }
+
+        // --- 事件監聽 ---
+
+        // 點擊左鍵啟動
+        canvas.addEventListener("mousedown", (e) => {
+            if (e.button === 0 && !isBallLaunched) { // 0 是左鍵
+                isBallLaunched = true;
+                document.getElementById("gameStatus").style.display = "none";
+                playSound(440, 'sine', 0.1, 0.1); // 發射音效
+            }
+        });
+
+        // 滑鼠移動控制
+        document.addEventListener("mousemove", (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const relativeX = e.clientX - rect.left;
+            if (relativeX > 0 && relativeX < canvas.width) {
+                paddleX = relativeX - paddleWidth / 2;
+                // 防止擋板出界
+                if (paddleX < 0) paddleX = 0;
+                if (paddleX + paddleWidth > canvas.width) paddleX = canvas.width - paddleWidth;
+            }
+        });
+
+        function collisionDetection() {
+            let currentRows = Math.min(level, 7);
+            for (let c = 0; c < brickColumnCount; c++) {
+                for (let r = 0; r < currentRows; r++) {
+                    const b = bricks[c][r];
+                    if (b.status == 1) {
+                        if (x > b.x && x < b.x + brickWidth && y > b.y && y < b.y + brickHeight) {
+                            dy = -dy;
+                            b.status = 0;
+                            score++;
+                            bricksRemaining--;
+                            playSound(500 + (r * 60), 'triangle', 0.1, 0.1); // 撞擊磚塊音效
+                            if (bricksRemaining === 0) {
+                                setTimeout(nextLevel, 100);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        function nextLevel() {
+            playSound(523, 'sine', 0.1, 0.1);
+            setTimeout(() => playSound(659, 'sine', 0.1, 0.1), 100);
+            setTimeout(() => playSound(783, 'sine', 0.3, 0.1), 200);
+
+            level++;
+            lives++; // 過關獎勵
+            document.getElementById("levelDisplay").innerText = "Level " + level;
+            document.getElementById("livesText").innerText = lives;
+            alert("恭喜進入 Level " + level);
+            initBricks();
+            resetBallPosition();
+        }
+
+        function drawBall() {
+            ctx.beginPath();
+            ctx.arc(x, y, ballRadius, 0, Math.PI * 2);
+            ctx.fillStyle = "#e74c3c";
+            ctx.fill();
+            ctx.closePath();
+        }
+
+        function drawPaddle() {
+            ctx.beginPath();
+            ctx.rect(paddleX, canvas.height - paddleHeight, paddleWidth, paddleHeight);
+            ctx.fillStyle = "#34495e";
+            ctx.fill();
+            ctx.closePath();
+        }
+
+        function drawBricks() {
+            let currentRows = Math.min(level, 7);
+            const colors = ["#3498db", "#2ecc71", "#9b59b6", "#f1c40f", "#e67e22", "#1abc9c", "#34495e"];
+            for (let c = 0; c < brickColumnCount; c++) {
+                for (let r = 0; r < currentRows; r++) {
+                    if (bricks[c][r].status == 1) {
+                        const brickX = (c * (brickWidth + brickPadding)) + brickOffsetLeft;
+                        const brickY = (r * (brickHeight + brickPadding)) + brickOffsetTop;
+                        bricks[c][r].x = brickX;
+                        bricks[c][r].y = brickY;
+                        ctx.beginPath();
+                        ctx.rect(brickX, brickY, brickWidth, brickHeight);
+                        ctx.fillStyle = colors[r % colors.length];
+                        ctx.fill();
+                        ctx.closePath();
+                    }
+                }
+            }
+        }
+
+        function drawStatus() {
+            ctx.font = "bold 14px Segoe UI";
+            ctx.fillStyle = "#2c3e50";
+            ctx.fillText("Score: " + score, 15, 25);
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawBricks();
+            drawBall();
+            drawPaddle();
+            drawStatus();
+
+            if (!isBallLaunched) {
+                // 球跟隨擋板移動
+                x = paddleX + paddleWidth / 2;
+                y = canvas.height - paddleHeight - ballRadius - 2;
+            } else {
+                collisionDetection();
+
+                // 牆壁碰撞
+                if (x + dx > canvas.width - ballRadius || x + dx < ballRadius) {
+                    dx = -dx;
+                    playSound(220, 'sine', 0.1, 0.05);
+                }
+                if (y + dy < ballRadius) {
+                    dy = -dy;
+                    playSound(220, 'sine', 0.1, 0.05);
+                } else if (y + dy > canvas.height - ballRadius) {
+                    if (x > paddleX && x < paddleX + paddleWidth) {
+                        // 根據撞擊點計算反彈角度
+                        let hitPoint = x - (paddleX + paddleWidth / 2);
+                        dx = hitPoint * 0.25;
+                        dy = -dy;
+                        playSound(350, 'square', 0.1, 0.08);
+                    } else {
+                        lives--;
+                        document.getElementById("livesText").innerText = lives;
+                        playSound(110, 'sawtooth', 0.3, 0.15); // 漏球音效
+                        if (!lives) {
+                            alert("GAME OVER\n得分：" + score);
+                            document.location.reload();
+                        } else {
+                            resetBallPosition();
+                        }
+                    }
+                }
+                x += dx;
+                y += dy;
+            }
+            requestAnimationFrame(draw);
+        }
+
+        // 初始化
+        initBricks();
+        resetBallPosition();
+        draw();
+    </script>
+</body>
+</html>
