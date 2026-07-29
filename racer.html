@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Canvas 閃避賽車遊戲 - 炸彈功能版</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #2c3e50;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: white;
+            overflow: hidden;
+            transition: background-color 0.5s;
+        }
+        
+        #game-container {
+            position: relative;
+        }
+
+        #gameCanvas {
+            background-color: #555;
+            border: 4px solid #ecf0f1;
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            transition: background-color 0.5s;
+        }
+
+        .panel {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            background: rgba(0, 0, 0, 0.85);
+            padding: 30px;
+            border-radius: 10px;
+            width: 260px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.6);
+        }
+
+        #ui { display: none; }
+
+        h2 {
+            margin-top: 0;
+            color: #e74c3c;
+            font-size: 32px;
+        }
+        
+        h2.title { color: #3498db; }
+
+        button {
+            padding: 12px 24px;
+            font-size: 18px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: bold;
+            width: 100%;
+            margin-top: 10px;
+            box-shadow: 0 4px #2980b9;
+        }
+
+        button:hover {
+            background-color: #2980b9;
+            transform: translateY(2px);
+            box-shadow: 0 2px #1c5980;
+        }
+        
+        button:active {
+            transform: translateY(4px);
+            box-shadow: 0 0 #1c5980;
+        }
+
+        .info-board {
+            display: flex;
+            gap: 20px;
+            font-size: 22px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+
+        .level-up-text {
+            position: absolute;
+            top: 30%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 40px;
+            color: #f1c40f;
+            font-weight: bold;
+            text-shadow: 0 0 10px #f39c12;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s;
+        }
+        
+        .controls-info {
+            font-size: 14px;
+            color: #bdc3c7;
+            margin-bottom: 15px;
+            text-align: left;
+            line-height: 1.5;
+            background: rgba(255,255,255,0.1);
+            padding: 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="info-board">
+        <div>等級: <span id="level" style="color:#f1c40f">1</span></div>
+        <div>分數: <span id="score">0</span></div>
+        <div>💣炸彈: <span id="bombs" style="color:#e74c3c">0</span></div>
+    </div>
+    
+    <div id="game-container">
+        <canvas id="gameCanvas" width="400" height="600"></canvas>
+        <div id="levelUpAlert" class="level-up-text">Level Up!</div>
+        
+        <!-- 開始畫面 -->
+        <div id="startMenu" class="panel">
+            <h2 class="title">閃避賽車</h2>
+            <div class="controls-info">
+                🏎️ <b>[左右方向鍵]</b>：移動閃避<br>
+                💣 <b>[空白鍵]</b>：發射炸彈<br>
+                ✨ 收集路上的黑球可補充炸彈
+            </div>
+            <button id="startBtn">開始遊戲</button>
+        </div>
+
+        <!-- 結束畫面 -->
+        <div id="ui" class="panel">
+            <h2>Game Over!</h2>
+            <p>最終等級: <span id="finalLevel">1</span></p>
+            <p>最終分數: <span id="finalScore">0</span></p>
+            <button id="restartBtn">返回並重玩</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreElement = document.getElementById('score');
+        const levelElement = document.getElementById('level');
+        const bombsElement = document.getElementById('bombs');
+        const finalScoreElement = document.getElementById('finalScore');
+        const finalLevelElement = document.getElementById('finalLevel');
+        const uiPanel = document.getElementById('ui');
+        const startMenu = document.getElementById('startMenu');
+        const restartBtn = document.getElementById('restartBtn');
+        const startBtn = document.getElementById('startBtn');
+        const levelUpAlert = document.getElementById('levelUpAlert');
+
+        let score = 0;
+        let level = 1;
+        let bombCount = 0;
+        let gameFrame = 0;
+        let gameOver = false;
+        let baseSpeed = 5;
+        let animationId;
+        
+        const lanes = [25, 125, 225, 325];
+
+        const player = {
+            x: 175,
+            y: canvas.height - 100,
+            width: 50,
+            height: 80,
+            color: '#3498db',
+            speed: 8,
+            dx: 0
+        };
+
+        let obstacles = [];
+        let items = [];
+        let projectiles = [];
+
+        // --- Web Audio API 音效系統 ---
+        let audioCtx;
+
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playSound(type) {
+            if (!audioCtx) return;
+            
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            
+            const now = audioCtx.currentTime;
+            
+            if (type === 'score') {
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(800, now);
+                oscillator.frequency.exponentialRampToValueAtTime(1200, now + 0.1);
+                gainNode.gain.setValueAtTime(0.1, now);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+                oscillator.start(now);
+                oscillator.stop(now + 0.1);
+            } else if (type === 'levelup') {
+                oscillator.type = 'square';
+                oscillator.frequency.setValueAtTime(440, now);
+                oscillator.frequency.setValueAtTime(554, now + 0.1);
+                oscillator.frequency.setValueAtTime(659, now + 0.2);
+                oscillator.frequency.setValueAtTime(880, now + 0.3);
+                gainNode.gain.setValueAtTime(0.1, now);
+                gainNode.gain.linearRampToValueAtTime(0, now + 0.4);
+                oscillator.start(now);
+                oscillator.stop(now + 0.4);
+            } else if (type === 'crash' || type === 'explode') {
+                // 碰撞與爆炸共用低頻音效
+                oscillator.type = 'sawtooth';
+                oscillator.frequency.setValueAtTime(150, now);
+                oscillator.frequency.exponentialRampToValueAtTime(10, now + 0.5);
+                gainNode.gain.setValueAtTime(0.3, now);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+                oscillator.start(now);
+                oscillator.stop(now + 0.5);
+            } else if (type === 'pickup') {
+                // 撿到道具音效
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(1200, now);
+                oscillator.frequency.linearRampToValueAtTime(1800, now + 0.1);
+                gainNode.gain.setValueAtTime(0.2, now);
+                gainNode.gain.linearRampToValueAtTime(0, now + 0.1);
+                oscillator.start(now);
+                oscillator.stop(now + 0.1);
+            } else if (type === 'fire') {
+                // 發射音效
+                oscillator.type = 'square';
+                oscillator.frequency.setValueAtTime(600, now);
+                oscillator.frequency.exponentialRampToValueAtTime(200, now + 0.1);
+                gainNode.gain.setValueAtTime(0.1, now);
+                gainNode.gain.linearRampToValueAtTime(0, now + 0.1);
+                oscillator.start(now);
+                oscillator.stop(now + 0.1);
+            }
+        }
+
+        // --- 鍵盤監聽 ---
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft') player.dx = -player.speed;
+            if (e.key === 'ArrowRight') player.dx = player.speed;
+            if (e.code === 'Space' && !e.repeat) {
+                e.preventDefault(); // 防止空白鍵捲動網頁
+                fireBomb();
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') player.dx = 0;
+        });
+
+        function fireBomb() {
+            if (gameOver || bombCount <= 0) return;
+            
+            bombCount--;
+            bombsElement.innerText = bombCount;
+            playSound('fire');
+            
+            // 從車頭中央發射
+            projectiles.push(new Projectile(player.x + player.width / 2, player.y));
+        }
+
+        function drawPlayer() {
+            ctx.fillStyle = player.color;
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+            ctx.fillStyle = '#87ceeb';
+            ctx.fillRect(player.x + 10, player.y + 15, player.width - 20, 20);
+            ctx.fillStyle = '#e74c3c';
+            ctx.fillRect(player.x + 5, player.y + player.height - 10, 10, 5);
+            ctx.fillRect(player.x + player.width - 15, player.y + player.height - 10, 10, 5);
+        }
+
+        function updatePlayer() {
+            player.x += player.dx;
+            if (player.x < 0) player.x = 0;
+            if (player.x + player.width > canvas.width) player.x = canvas.width - player.width;
+        }
+
+        // --- 類別定義 ---
+        
+        class Projectile {
+            constructor(x, y) {
+                this.x = x - 5; // 置中
+                this.y = y;
+                this.width = 10;
+                this.height = 20;
+                this.speed = 12;
+                this.markedForDeletion = false;
+            }
+            update() {
+                this.y -= this.speed;
+                if (this.y + this.height < 0) this.markedForDeletion = true;
+            }
+            draw() {
+                ctx.fillStyle = '#f1c40f'; // 黃色飛彈
+                ctx.fillRect(this.x, this.y, this.width, this.height);
+                // 飛彈尾焰
+                ctx.fillStyle = '#e74c3c';
+                ctx.fillRect(this.x + 2, this.y + this.height, 6, 8);
+            }
+        }
+
+        class Collectible {
+            constructor(laneIndex) {
+                this.width = 30;
+                this.height = 30;
+                this.x = lanes[laneIndex] + 10; // 稍微置中於車道
+                this.y = -this.height;
+                this.markedForDeletion = false;
+            }
+            update() {
+                this.y += baseSpeed;
+                if (this.y > canvas.height) this.markedForDeletion = true;
+            }
+            draw() {
+                // 畫一顆黑色的圓形炸彈
+                ctx.beginPath();
+                ctx.arc(this.x + this.width/2, this.y + this.height/2, 15, 0, Math.PI * 2);
+                ctx.fillStyle = '#222';
+                ctx.fill();
+                ctx.closePath();
+                // 炸彈的引信
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(this.x + this.width/2 - 2, this.y - 5, 4, 8);
+                ctx.fillStyle = '#e74c3c';
+                ctx.fillRect(this.x + this.width/2 - 3, this.y - 8, 6, 4);
+            }
+        }
+
+        class Obstacle {
+            constructor(laneIndex) {
+                this.width = 50;
+                this.height = 80;
+                this.x = lanes[laneIndex];
+                this.y = -this.height;
+                const colors = ['#e74c3c', '#d35400', '#c0392b', '#8e44ad'];
+                this.color = colors[(level - 1) % colors.length];
+                this.markedForDeletion = false;
+                this.passed = false;
+            }
+            update() {
+                this.y += baseSpeed;
+                
+                if (!this.passed && this.y > player.y + player.height) {
+                    this.passed = true;
+                    score += 10;
+                    scoreElement.innerText = score;
+                    playSound('score');
+                    checkLevelUp();
+                }
+                if (this.y > canvas.height) {
+                    this.markedForDeletion = true;
+                }
+            }
+            draw() {
+                ctx.fillStyle = this.color;
+                ctx.fillRect(this.x, this.y, this.width, this.height);
+                ctx.fillStyle = '#333';
+                ctx.fillRect(this.x + 10, this.y + this.height - 35, this.width - 20, 20);
+            }
+        }
+        
+        function checkLevelUp() {
+            const newLevel = Math.floor(score / 150) + 1;
+            if (newLevel > level) {
+                level = newLevel;
+                levelElement.innerText = level;
+                
+                baseSpeed += 1.5;
+                player.speed += 0.5;
+                
+                playSound('levelup');
+                
+                levelUpAlert.style.opacity = 1;
+                setTimeout(() => { levelUpAlert.style.opacity = 0; }, 1000);
+                
+                if(level % 3 === 0) {
+                    canvas.style.backgroundColor = '#4a3b3b';
+                } else if (level % 3 === 1) {
+                    canvas.style.backgroundColor = '#555';
+                } else {
+                    canvas.style.backgroundColor = '#3b434a';
+                }
+            }
+        }
+
+        function handleProjectiles() {
+            for (let p of projectiles) {
+                p.update();
+                p.draw();
+                
+                // 飛彈與障礙物的碰撞偵測
+                for (let obs of obstacles) {
+                    if (!obs.markedForDeletion && !p.markedForDeletion) {
+                        if (
+                            p.x < obs.x + obs.width &&
+                            p.x + p.width > obs.x &&
+                            p.y < obs.y + obs.height &&
+                            p.y + p.height > obs.y
+                        ) {
+                            // 擊中目標：銷毀飛彈與障礙物
+                            obs.markedForDeletion = true;
+                            p.markedForDeletion = true;
+                            playSound('explode');
+                            
+                            // 炸毀敵人額外加 5 分
+                            score += 5;
+                            scoreElement.innerText = score;
+                            checkLevelUp();
+                        }
+                    }
+                }
+            }
+            projectiles = projectiles.filter(p => !p.markedForDeletion);
+        }
+
+        function handleItems() {
+            // 每隔一段時間隨機生成炸彈道具 (機率性)
+            if (gameFrame % 250 === 0 && Math.random() > 0.4) {
+                let laneIndex = Math.floor(Math.random() * 4);
+                
+                // 檢查該車道是否已經有障礙物剛生成，避免重疊
+                let laneSafe = true;
+                for (let obs of obstacles) {
+                    if (obs.x === lanes[laneIndex] && obs.y < 50) {
+                        laneSafe = false;
+                    }
+                }
+                
+                if (laneSafe) {
+                    items.push(new Collectible(laneIndex));
+                }
+            }
+            
+            for (let item of items) {
+                item.update();
+                item.draw();
+                
+                // 玩家撿取道具碰撞偵測
+                if (
+                    player.x < item.x + item.width &&
+                    player.x + player.width > item.x &&
+                    player.y < item.y + item.height &&
+                    player.y + player.height > item.y
+                ) {
+                    item.markedForDeletion = true;
+                    bombCount++;
+                    bombsElement.innerText = bombCount;
+                    playSound('pickup');
+                }
+            }
+            items = items.filter(i => !i.markedForDeletion);
+        }
+
+        function handleObstacles() {
+            let spawnRate = Math.max(15, 50 - (level * 5));
+            
+            if (gameFrame % spawnRate === 0) {
+                let numObstacles = 1;
+                if (level >= 3 && Math.random() > 0.4) numObstacles = 2;
+                if (level >= 6 && Math.random() > 0.6) numObstacles = 3;
+                
+                let availableLanes = [0, 1, 2, 3];
+                availableLanes.sort(() => Math.random() - 0.5);
+                
+                for(let i = 0; i < numObstacles; i++) {
+                    obstacles.push(new Obstacle(availableLanes[i]));
+                }
+            }
+            
+            for (let i = 0; i < obstacles.length; i++) {
+                let obs = obstacles[i];
+                obs.update();
+                obs.draw();
+                
+                let hitboxOffset = 5; 
+                if (
+                    player.x + hitboxOffset < obs.x + obs.width - hitboxOffset &&
+                    player.x + player.width - hitboxOffset > obs.x + hitboxOffset &&
+                    player.y + hitboxOffset < obs.y + obs.height - hitboxOffset &&
+                    player.y + player.height - hitboxOffset > obs.y + hitboxOffset
+                ) {
+                    if (!gameOver) {
+                        gameOver = true;
+                        playSound('crash');
+                    }
+                }
+            }
+            obstacles = obstacles.filter(obstacle => !obstacle.markedForDeletion);
+        }
+
+        function drawRoad() {
+            ctx.fillStyle = '#fff';
+            for (let lane = 1; lane < 4; lane++) {
+                let xPos = lane * 100 - 5;
+                for (let i = -40; i < canvas.height; i += 60) {
+                    let yPos = i + (gameFrame * baseSpeed * 0.8) % 60;
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                    ctx.fillRect(xPos, yPos, 6, 30);
+                }
+            }
+        }
+
+        function animate() {
+            if (gameOver) return;
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            drawRoad();
+            updatePlayer();
+            drawPlayer();
+            
+            handleItems();       // 處理道具生成與撿取
+            handleProjectiles(); // 處理飛彈發射與擊毀
+            handleObstacles();   // 處理敵人車輛
+            
+            if (gameOver) {
+                cancelAnimationFrame(animationId);
+                finalScoreElement.innerText = score;
+                finalLevelElement.innerText = level;
+                uiPanel.style.display = 'block';
+                return;
+            }
+            
+            gameFrame++;
+            animationId = requestAnimationFrame(animate);
+        }
+
+        function init() {
+            initAudio();
+            
+            score = 0;
+            level = 1;
+            bombCount = 3; // 初始給予 3 顆炸彈
+            gameFrame = 0;
+            baseSpeed = 5;
+            player.speed = 8;
+            gameOver = false;
+            
+            obstacles = [];
+            items = [];
+            projectiles = [];
+            
+            player.x = 175;
+            player.dx = 0;
+            
+            scoreElement.innerText = score;
+            levelElement.innerText = level;
+            bombsElement.innerText = bombCount;
+            
+            uiPanel.style.display = 'none';
+            startMenu.style.display = 'none';
+            canvas.style.backgroundColor = '#555';
+            
+            if(animationId) cancelAnimationFrame(animationId);
+            animate();
+        }
+        
+        function backToStart() {
+            uiPanel.style.display = 'none';
+            startMenu.style.display = 'block';
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
+        startBtn.addEventListener('click', init);
+        restartBtn.addEventListener('click', backToStart);
+        
+        drawRoad();
+        drawPlayer();
+    </script>
+</body>
+</html>
